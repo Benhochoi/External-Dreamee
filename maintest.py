@@ -8,6 +8,10 @@ from langchain_ollama.llms import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
 from vector import vector_store, get_smart_retriever
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
 
 
 # ============================================================
@@ -264,61 +268,55 @@ def format_docs(docs: list[Document]) -> str:
         parts.append(f"{header}\n{doc.page_content}")
     return "\n\n" + "─"*50 + "\n\n".join(parts)
 
-
 # ============================================================
-# MAIN LOOP
+# PHẦN MỚI: TẠO MÁY CHỦ KẾT NỐI VỚI WEB (FASTAPI)
 # ============================================================
 
-def main():
-    print("\n" + "=" * 60)
-    print("  TRỢ LÝ QUY CHẾ HVNH - HYBRID SEARCH (BM25 + VECTOR)")
-    print("  Gõ 'debug' để xem điểm số tìm kiếm")
-    print("=" * 60)
+app = FastAPI(title="HVBot RAG API")
 
-    debug_mode = False
+# Cho phép Web (HTML) có thể gửi tin nhắn qua Python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    while True:
-        question = input("\n Tôi có thể giúp gì cho bạn (gõ 'kết thúc' để thoát): ").strip()
+class ChatRequest(BaseModel):
+    message: str
+    userId: str = None
 
-        if question.lower() == "kết thúc":
-            print("Tạm biệt!")
-            break
-        if question.lower() == "debug":
-            debug_mode = not debug_mode
-            print(f" Debug mode: {'BẬT' if debug_mode else 'TẮT'}")
-            continue
-        if not question:
-            continue
-
-        print("Đang tìm kiếm...")
-
-        if debug_mode:
-            # Hiển thị điểm số từng nguồn
-            scored = retriever.invoke_with_scores(question)
-            print("\n[DEBUG] KẾT QUẢ HYBRID SEARCH:")
-            print("─" * 60)
-            for i, (doc, score, src) in enumerate(scored):
-                meta  = doc.metadata
-                dieu  = meta.get("dieu_so", "?")
-                title = meta.get("dieu_title", "")[:35]
-                level = meta.get("level", "")
-                print(f"  #{i+1} Điều {dieu} ({level}) | RRF={score:.4f}")
-                print(f"      {title}")
-                print(f"      Nguồn: {src}")
-            raw_docs = [d for d, _, _ in scored]
-        else:
-            raw_docs = retriever.invoke(question)
-
+@app.post("/api/chat")
+async def chat_api(request: ChatRequest):
+    try:
+        question = request.message
+        print(f"\n[WEB GỬI CÂU HỎI]: {question}")
+        
+        # 1. Tìm kiếm quy chế bằng Hybrid Search
+        raw_docs = retriever.invoke(question)
         reviews_text = format_docs(raw_docs)
-        print("\n AI đang đọc tài liệu và suy nghĩ...")
-
+        
+        # 2. Đưa vào AI (Ollama) xử lý
+        print("AI đang đọc quy chế và suy nghĩ...")
         result = chain.invoke({"reviews": reviews_text, "question": question})
+        
+        print(f"[XONG] Đã gửi câu trả lời về giao diện Web")
+        return {"reply": result}
+        
+    except Exception as e:
+        print(f"[LỖI RỒI]: {e}")
+        return {"reply": f"Hệ thống gặp lỗi kỹ thuật: {str(e)}"}
 
-        print("\n" + "=" * 60)
-        print(" TRẢ LỜI:")
-        print("=" * 60)
-        print(result)
-
-
+# ============================================================
+# LỆNH KHỞI CHẠY (BẮT BUỘC)
+# ============================================================
 if __name__ == "__main__":
-    main()
+    print("\n" + "!" * 50)
+    print("  MÁY CHỦ AI ĐANG CHẠY...")
+    print("  ĐỊA CHỈ API: http://localhost:5000/api/chat")
+    print("  HÃY MỞ FILE HTML ĐỂ BẮT ĐẦU CHAT!")
+    print("!" * 50)
+    
+    # Chạy máy chủ tại cổng 5000
+    uvicorn.run(app, host="0.0.0.0", port=5000)
